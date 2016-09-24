@@ -15,6 +15,7 @@
 #include <math.h>
 #include <TinyGPS.h>
 #include <SoftwareSerial.h>
+#include <AMS_IAQ_CORE_C.h>
 
 // semantic versioning - see http://semver.org/
 #define AQEV2FW_MAJOR_VERSION 2
@@ -48,7 +49,11 @@ SdFat SD;
 
 TinyGPS gps;
 SoftwareSerial gpsSerial(18, 17); // RX, TX
-SoftwareSerial co2Serial(9, 10);  // RX, TX
+
+AMS_IAQ_CORE_C iaqcore;
+boolean iaqcore_ready = false;
+boolean iaqcore_failed = false;
+boolean iaqcore_ok = false;
 
 boolean gps_disabled = false;
 #define GPS_MQTT_STRING_LENGTH (128)
@@ -74,22 +79,28 @@ float reported_humidity_offset_percent = 0.0f;
 
 float temperature_degc = 0.0f;
 float relative_humidity_percent = 0.0f;
-float co2_ppm = 0.0f;
+float tvoc_ppb = 0.0f;
+float co2_equivalent_ppm = 0.0f;
+float resistance_ohms = 0.0f;
 
 float instant_temperature_degc = 0.0f;
 float instant_humidity_percent = 0.0f;
-float instant_co2_ppm = 0.0f;
+float instant_tvoc_ppb = 0.0f;
+float instant_co2_equivalent_ppm = 0.0f;
+float instant_resistance_ohms = 0.0f;
 
 float gps_latitude = TinyGPS::GPS_INVALID_F_ANGLE;
 float gps_longitude = TinyGPS::GPS_INVALID_F_ANGLE;
 float gps_altitude = TinyGPS::GPS_INVALID_F_ALTITUDE;
 unsigned long gps_age = TinyGPS::GPS_INVALID_AGE;
 
-#define MAX_SAMPLE_BUFFER_DEPTH (240) // 20 minutes @ 5 second resolution
-#define CO2_SAMPLE_BUFFER         (0)
-#define TEMPERATURE_SAMPLE_BUFFER (1)
-#define HUMIDITY_SAMPLE_BUFFER    (2)
-float sample_buffer[3][MAX_SAMPLE_BUFFER_DEPTH] = {0};
+#define MAX_SAMPLE_BUFFER_DEPTH (120) // 10 minutes @ 5 second resolution
+#define CO2_EQUIVALENT_SAMPLE_BUFFER (0)
+#define TVOC_SAMPLE_BUFFER           (1)
+#define RESISTANCE_SAMPLE_BUFFER     (2)
+#define TEMPERATURE_SAMPLE_BUFFER    (3)
+#define HUMIDITY_SAMPLE_BUFFER       (4)
+float sample_buffer[5][MAX_SAMPLE_BUFFER_DEPTH] = {0};
 uint16_t sample_buffer_idx = 0;
 
 uint32_t sampling_interval = 0;    // how frequently the sensorss are sampled
@@ -104,7 +115,7 @@ float touch_sample_buffer[TOUCH_SAMPLE_BUFFER_DEPTH] = {0};
 
 boolean temperature_ready = false;
 boolean humidity_ready = false;
-boolean co2_ready = false;
+boolean ams_ready = false;
 
 boolean init_sht25_ok = false;
 boolean init_spi_flash_ok = false;
@@ -154,12 +165,12 @@ uint8_t mode = MODE_OPERATIONAL;
 #define EEPROM_STATIC_DNS         (EEPROM_STATIC_GATEWAY - 4)     // static dns server ip address, 4 bytes
 #define EEPROM_MQTT_PASSWORD      (EEPROM_STATIC_DNS - 32)        // password for mqtt server, up to 32 characters (one of which is a null terminator)
 #define EEPROM_CO2_SENSITIVITY    (EEPROM_MQTT_PASSWORD - 4)      // float value, 4-bytes, the sensitivity from the sticker  [UNUSED]
-#define EEPROM_CO2_CAL_SLOPE      (EEPROM_CO2_SENSITIVITY - 4)     // float value, 4-bytes, the slope applied to the sensor   [UNUSED] 
-#define EEPROM_CO2_CAL_OFFSET     (EEPROM_CO2_CAL_SLOPE - 4)       // float value, 4-btyes, the offset applied to the sensor
-#define EEPROM_CO_SENSITIVITY     (EEPROM_CO2_CAL_OFFSET - 4)      // float value, 4-bytes, the sensitivity from the sticker  [UNUSED]
-#define EEPROM_CO_CAL_SLOPE       (EEPROM_CO_SENSITIVITY - 4)     // float value, 4-bytes, the slope applied to the sensor   [UNUSED]
-#define EEPROM_CO_CAL_OFFSET      (EEPROM_CO_CAL_SLOPE - 4)       // float value, 4-bytes, the offset applied to the sensor  [UNUSED] 
-#define EEPROM_PRIVATE_KEY        (EEPROM_CO_CAL_OFFSET - 32)     // 32-bytes of Random Data (256-bits)
+#define EEPROM_CO2_CAL_SLOPE      (EEPROM_CO2_SENSITIVITY - 4)    // float value, 4-bytes, the slope applied to the sensor   [UNUSED] 
+#define EEPROM_CO2_CAL_OFFSET     (EEPROM_CO2_CAL_SLOPE - 4)      // float value, 4-btyes, the offset applied to the sensor
+#define EEPROM_TVOC_SENSITIVITY   (EEPROM_CO2_CAL_OFFSET - 4)     // float value, 4-bytes, the sensitivity from the sticker  [UNUSED]
+#define EEPROM_TVOC_CAL_SLOPE     (EEPROM_TVOC_SENSITIVITY - 4)     // float value, 4-bytes, the slope applied to the sensor   [UNUSED]
+#define EEPROM_TVOC_CAL_OFFSET    (EEPROM_TVOC_CAL_SLOPE - 4)       // float value, 4-bytes, the offset applied to the sensor  [UNUSED] 
+#define EEPROM_PRIVATE_KEY        (EEPROM_TVOC_CAL_OFFSET - 32)     // 32-bytes of Random Data (256-bits)
 #define EEPROM_MQTT_SERVER_NAME   (EEPROM_PRIVATE_KEY - 32)       // string, the DNS name of the MQTT server (default mqtt.opensensors.io), up to 32 characters (one of which is a null terminator)
 #define EEPROM_MQTT_USERNAME      (EEPROM_MQTT_SERVER_NAME - 32)  // string, the user name for the MQTT server (default wickeddevice), up to 32 characters (one of which is a null terminator)
 #define EEPROM_MQTT_CLIENT_ID     (EEPROM_MQTT_USERNAME - 32)     // string, the client identifier for the MQTT server (default SHT25 identifier), between 1 and 23 characters long
@@ -183,6 +194,8 @@ uint8_t mode = MODE_OPERATIONAL;
 #define EEPROM_NTP_TZ_OFFSET_HRS  (EEPROM_NTP_SERVER_NAME - 4)    // timezone offset as a floating point value
 #define EEPROM_CO2_BASELINE_VOLTAGE_TABLE (EEPROM_NTP_TZ_OFFSET_HRS - (5*sizeof(baseline_voltage_t))) // array of (up to) five structures for baseline offset characterization over temperature
 #define EEPROM_MQTT_TOPIC_SUFFIX_ENABLED  (EEPROM_CO2_BASELINE_VOLTAGE_TABLE - 1) 
+#define EEPROM_TVOC_BASELINE_VOLTAGE_TABLE (EEPROM_MQTT_TOPIC_SUFFIX_ENABLED - (5*sizeof(baseline_voltage_t))) // array of (up to) five structures for baseline offset characterization over temperature
+#define EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE (EEPROM_TVOC_BASELINE_VOLTAGE_TABLE - (5*sizeof(baseline_voltage_t))) // array of (up to) five structures for baseline offset characterization over temperature
 //  /\
 //   L Add values up here by subtracting offsets to previously added values
 //   * ... and make sure the addresses don't collide and start overlapping!
@@ -191,10 +204,10 @@ uint8_t mode = MODE_OPERATIONAL;
 #define EEPROM_BACKUP_NTP_TZ_OFFSET_HRS  (EEPROM_BACKUP_HUMIDITY_OFFSET + 4)
 #define EEPROM_BACKUP_HUMIDITY_OFFSET    (EEPROM_BACKUP_TEMPERATURE_OFFSET + 4)
 #define EEPROM_BACKUP_TEMPERATURE_OFFSET (EEPROM_BACKUP_PRIVATE_KEY + 32)
-#define EEPROM_BACKUP_PRIVATE_KEY        (EEPROM_BACKUP_CO_CAL_OFFSET + 4)
-#define EEPROM_BACKUP_CO_CAL_OFFSET      (EEPROM_BACKUP_CO_CAL_SLOPE + 4)
-#define EEPROM_BACKUP_CO_CAL_SLOPE       (EEPROM_BACKUP_CO_SENSITIVITY + 4)
-#define EEPROM_BACKUP_CO_SENSITIVITY     (EEPROM_BACKUP_CO2_CAL_OFFSET + 4)
+#define EEPROM_BACKUP_PRIVATE_KEY        (EEPROM_BACKUP_TVOC_CAL_OFFSET + 4)
+#define EEPROM_BACKUP_TVOC_CAL_OFFSET    (EEPROM_BACKUP_TVOC_CAL_SLOPE + 4)
+#define EEPROM_BACKUP_TVOC_CAL_SLOPE     (EEPROM_BACKUP_TVOC_SENSITIVITY + 4)
+#define EEPROM_BACKUP_TVOC_SENSITIVITY   (EEPROM_BACKUP_CO2_CAL_OFFSET + 4)
 #define EEPROM_BACKUP_CO2_CAL_OFFSET     (EEPROM_BACKUP_CO2_CAL_SLOPE + 4)
 #define EEPROM_BACKUP_CO2_CAL_SLOPE      (EEPROM_BACKUP_CO2_SENSITIVITY + 4)
 #define EEPROM_BACKUP_CO2_SENSITIVITY    (EEPROM_BACKUP_MQTT_PASSWORD + 32)
@@ -213,6 +226,7 @@ uint8_t mode = MODE_OPERATIONAL;
 #define BACKUP_STATUS_MAC_ADDRESS_BIT             (7)
 #define BACKUP_STATUS_MQTT_PASSSWORD_BIT          (6)
 #define BACKUP_STATUS_CO2_CALIBRATION_BIT         (5)
+#define BACKUP_STATUS_TVOC_CALIBRATION_BIT        (4)
 #define BACKUP_STATUS_PRIVATE_KEY_BIT             (3)
 #define BACKUP_STATUS_TEMPERATURE_CALIBRATION_BIT (2)
 #define BACKUP_STATUS_HUMIDITY_CALIBRATION_BIT    (1)
@@ -244,6 +258,9 @@ void set_mqtt_authentication(char * arg);
 void set_mqtt_topic_prefix(char * arg);
 void backup(char * arg);
 void set_co2_offset(char * arg);
+void set_tvoc_offset(char * arg);
+void set_co2_slope(char * arg);
+void set_tvoc_slope(char * arg);
 void set_reported_temperature_offset(char * arg);
 void set_reported_humidity_offset(char * arg);
 void set_private_key(char * arg);
@@ -262,6 +279,7 @@ void set_ntp_server(char * arg);
 void set_ntp_timezone_offset(char * arg);
 void set_update_server_name(char * arg);
 void co2_baseline_voltage_characterization_command(char * arg);
+void tvoc_baseline_voltage_characterization_command(char * arg);
 void topic_suffix_config(char * arg);
 
 // Note to self:
@@ -303,6 +321,9 @@ const char cmd_string_mqttsuffix[] PROGMEM  = "mqttsuffix ";
 const char cmd_string_updatesrv[] PROGMEM   = "updatesrv  ";
 const char cmd_string_backup[] PROGMEM      = "backup     ";
 const char cmd_string_co2_off[] PROGMEM     = "co2_off    ";
+const char cmd_string_co2_slope[] PROGMEM   = "co2_slope  ";
+const char cmd_string_tvoc_off[] PROGMEM    = "tvoc_off   ";
+const char cmd_string_tvoc_slope[] PROGMEM  = "tvoc_slope ";
 const char cmd_string_temp_off[] PROGMEM    = "temp_off   ";
 const char cmd_string_hum_off[] PROGMEM     = "hum_off    ";
 const char cmd_string_key[] PROGMEM         = "key        ";
@@ -320,6 +341,7 @@ const char cmd_string_altitude[] PROGMEM    = "altitude   ";
 const char cmd_string_ntpsrv[] PROGMEM      = "ntpsrv     ";
 const char cmd_string_tz_off[] PROGMEM      = "tz_off     ";
 const char cmd_string_co2_blv[] PROGMEM     = "co2_blv    ";
+const char cmd_string_tvoc_blv[] PROGMEM    = "tvoc_blv    ";
 const char cmd_string_null[] PROGMEM        = "";
 
 PGM_P const commands[] PROGMEM = {
@@ -344,6 +366,9 @@ PGM_P const commands[] PROGMEM = {
   cmd_string_updatesrv,
   cmd_string_backup,
   cmd_string_co2_off,
+  cmd_string_co2_slope,
+  cmd_string_tvoc_off,
+  cmd_string_tvoc_slope,
   cmd_string_temp_off,
   cmd_string_hum_off,
   cmd_string_key,
@@ -361,6 +386,7 @@ PGM_P const commands[] PROGMEM = {
   cmd_string_ntpsrv,
   cmd_string_tz_off,
   cmd_string_co2_blv, 
+  cmd_string_tvoc_blv, 
   cmd_string_null
 };
 
@@ -386,6 +412,9 @@ void (*command_functions[])(char * arg) = {
   set_update_server_name,
   backup,
   set_co2_offset,
+  set_co2_slope,
+  set_tvoc_offset,
+  set_tvoc_slope,
   set_reported_temperature_offset,
   set_reported_humidity_offset,
   set_private_key,
@@ -403,6 +432,7 @@ void (*command_functions[])(char * arg) = {
   set_ntp_server,
   set_ntp_timezone_offset,
   co2_baseline_voltage_characterization_command,
+  tvoc_baseline_voltage_characterization_command,
   0
 };
 
@@ -435,15 +465,26 @@ const uint8_t heartbeat_waveform[NUM_HEARTBEAT_WAVEFORM_SAMPLES] PROGMEM = {
 };
 uint8_t heartbeat_waveform_index = 0;
 
-char scratch[512] = { 0 };  // scratch buffer, for general use
+char scratch[1024] = { 0 };  // scratch buffer, for general use
 #define ESP8266_INPUT_BUFFER_SIZE (1500)
 uint8_t esp8266_input_buffer[ESP8266_INPUT_BUFFER_SIZE] = {0};     // sketch must instantiate a buffer to hold incoming data
                                                                    // 1500 bytes is way overkill for MQTT, but if you have it, may as well
                                                                    // make space for a whole TCP packet
 char converted_value_string[64] = {0};
 char compensated_value_string[64] = {0};
+char compensated_instant_value_string[64] = {0};
 char raw_value_string[64] = {0};
 char raw_instant_value_string[64] = {0};
+
+char converted_value_string_2[64] = {0};
+char compensated_value_string_2[64] = {0};
+char compensated_instant_value_string_2[64] = {0};
+char raw_instant_value_string_2[64] = {0};
+
+char converted_value_string_3[64] = {0};
+char compensated_value_string_3[64] = {0};
+char compensated_instant_value_string_3[64] = {0};
+char raw_instant_value_string_3[64] = {0};
 
 char MQTT_TOPIC_STRING[128] = {0};
 char MQTT_TOPIC_PREFIX[64] = "/orgs/wd/aqe/";
@@ -452,7 +493,9 @@ uint8_t mqtt_suffix_enabled = 0;
 const char * header_row = "Timestamp,"
                "Temperature[degC],"
                "Humidity[percent],"                   
-               "CO2[ppm],"                    
+               "CO2 Equivalent[ppm],"                    
+               "TVOC [ppb],"                                   
+               "Resistance [ohms],"                                                  
                "Latitude[deg],"
                "Longitude[deg],"
                "Altitude[m]";     
@@ -769,7 +812,7 @@ void setup() {
   
   if(mode == SUBMODE_NORMAL){
     setLCD_P(PSTR("TEMP ---  RH ---"
-                  "CO2  ---        "));           
+                  "VOC ---  CO2 ---"));           
     SUCCESS_MESSAGE_DELAY();                      
   }
   
@@ -798,7 +841,12 @@ void loop() {
     previous_sensor_sampling_millis = current_millis;    
     //Serial.print(F("Info: Sampling Sensors @ "));
     //Serial.println(millis());
-    collectCO2();    
+    if(iaqcore.update() && (iaqcore.getStatus() == AMS_IAQ_CORE_C_STATUS_OK)){
+      iaqcore_ok = true;
+    }
+    collectCO2Equivalent();   
+    collectTVOC();
+    collectResistance(); 
     collectTemperature();
     collectHumidity(); 
     advanceSampleBufferIndex(); 
@@ -866,7 +914,7 @@ void initializeHardware(void) {
 
   Serial.println(F(" +------------------------------------+"));
   Serial.println(F(" |   Welcome to Air Quality Egg 2.0   |"));
-  Serial.println(F(" |         CO2 Sensor Suite           |"));  
+  Serial.println(F(" |         VOC Sensor Suite           |"));  
   Serial.print(F(" |       Firmware Version "));
   Serial.print(firmware_version);
   Serial.println(F("       |"));
@@ -993,6 +1041,20 @@ void initializeHardware(void) {
   else {
     Serial.println(F("Failed."));
     init_sht25_ok = false;
+  }
+
+  // Initialize iAQ-core
+  Serial.print(F("Info: iAQ-core Initialization..."));
+  if (iaqcore.update() && 
+        ((iaqcore.getStatus() == AMS_IAQ_CORE_C_STATUS_OK) 
+          || (iaqcore.getStatus() == AMS_IAQ_CORE_C_STATUS_BUSY) 
+          || (iaqcore.getStatus() == AMS_IAQ_CORE_C_STATUS_WARMING_UP))) {
+    Serial.println(F("OK."));
+    iaqcore_failed = false;
+  }
+  else {
+    Serial.println(F("Failed."));
+    iaqcore_failed = true;
   }
 
   // Initialize SD card
@@ -2158,10 +2220,27 @@ void print_eeprom_value(char * arg) {
     Serial.println(F(" | Sensor Calibrations:                                        |"));
     Serial.println(F(" +-------------------------------------------------------------+"));
 
-    print_label_with_star_if_not_backed_up("CO2 Offset [V]: ", BACKUP_STATUS_CO2_CALIBRATION_BIT);
+    print_label_with_star_if_not_backed_up("CO2 Offset [ppm]: ", BACKUP_STATUS_CO2_CALIBRATION_BIT);
     print_eeprom_float((const float *) EEPROM_CO2_CAL_OFFSET);
+
+    print_label_with_star_if_not_backed_up("CO2 Slope [ppm/ppm]: ", BACKUP_STATUS_CO2_CALIBRATION_BIT);
+    print_eeprom_float((const float *) EEPROM_CO2_CAL_SLOPE);
+    
     Serial.print(F("    ")); Serial.println(F("CO2 Baseline Voltage Characterization:"));
     print_baseline_voltage_characterization(EEPROM_CO2_BASELINE_VOLTAGE_TABLE);
+
+    print_label_with_star_if_not_backed_up("TVOC Offset [ppb]: ", BACKUP_STATUS_TVOC_CALIBRATION_BIT);
+    print_eeprom_float((const float *) EEPROM_TVOC_CAL_OFFSET);
+
+    print_label_with_star_if_not_backed_up("TVOC Slope [ppb/ppb]: ", BACKUP_STATUS_TVOC_CALIBRATION_BIT);
+    print_eeprom_float((const float *) EEPROM_TVOC_CAL_SLOPE);
+    
+    Serial.print(F("    ")); Serial.println(F("TVOC Baseline Voltage Characterization:"));
+    print_baseline_voltage_characterization(EEPROM_TVOC_BASELINE_VOLTAGE_TABLE);
+
+    Serial.print(F("    ")); Serial.println(F("Resistance Baseline Voltage Characterization:"));
+    print_baseline_voltage_characterization(EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE);
+    
     char temp_reporting_offset_label[64] = {0};
     char temperature_units = (char) eeprom_read_byte((uint8_t *) EEPROM_TEMPERATURE_UNITS);
     snprintf(temp_reporting_offset_label, 63, "Temperature Reporting Offset [deg%c]: ", temperature_units); 
@@ -3587,6 +3666,18 @@ void set_co2_offset(char * arg) {
   set_float_param(arg, (float *) EEPROM_CO2_CAL_OFFSET, 0);
 }
 
+void set_tvoc_offset(char * arg){
+  set_float_param(arg, (float *) EEPROM_TVOC_CAL_OFFSET, 0);
+}
+
+void set_co2_slope(char * arg){
+  set_float_param(arg, (float *) EEPROM_CO2_CAL_SLOPE, 0);
+}
+
+void set_tvoc_slope(char * arg){
+  set_float_param(arg, (float *) EEPROM_TVOC_CAL_SLOPE, 0);
+}
+
 void set_reported_temperature_offset(char * arg) {
   set_float_param(arg, (float *) EEPROM_TEMPERATURE_OFFSET, 0);
 }
@@ -3843,6 +3934,10 @@ void baseline_voltage_characterization_command(char * arg, uint32_t eeprom_table
 
 void co2_baseline_voltage_characterization_command(char * arg){
   baseline_voltage_characterization_command(arg, EEPROM_CO2_BASELINE_VOLTAGE_TABLE);
+}
+
+void tvoc_baseline_voltage_characterization_command(char * arg){
+  baseline_voltage_characterization_command(arg, EEPROM_TVOC_BASELINE_VOLTAGE_TABLE);
 }
 
 void load_temperature_characterization_entry(uint32_t eeprom_table_base_address, uint8_t index){
@@ -4702,10 +4797,22 @@ boolean burstSampleADC(int adcChannel, float * result){
 /****** MQTT SUPPORT FUNCTIONS ******/
 void clearTempBuffers(void){
   memset(converted_value_string, 0, 64);
-  memset(compensated_value_string, 0, 64);
-  memset(raw_value_string, 0, 64);
-  memset(scratch, 0, 512);
+  memset(compensated_value_string, 0, 64);  
+  memset(compensated_instant_value_string, 0, 64);  
+  memset(raw_instant_value_string, 0, 64);
+  memset(raw_value_string, 0, 64);  
+  memset(scratch, 0, 1024);
   memset(MQTT_TOPIC_STRING, 0, 128);
+  
+  memset(converted_value_string_2, 0, 64);
+  memset(compensated_value_string_2, 0, 64);
+  memset(compensated_instant_value_string_2, 0, 64);  
+  memset(raw_instant_value_string_2, 0, 64);  
+
+  memset(converted_value_string_3, 0, 64);
+  memset(compensated_value_string_3, 0, 64);
+  memset(compensated_instant_value_string_3, 0, 64);  
+  memset(raw_instant_value_string_3, 0, 64);    
 }
 
 boolean mqttResolve(void){
@@ -4840,7 +4947,7 @@ boolean publishHeartbeat(){
   static uint32_t post_counter = 0;  
   uint8_t sample = pgm_read_byte(&heartbeat_waveform[heartbeat_waveform_index++]);
   
-  snprintf(scratch, 511, 
+  snprintf(scratch, 1023, 
   "{"
   "\"serial-number\":\"%s\","
   "\"converted-value\":%d,"
@@ -4893,7 +5000,7 @@ boolean publishTemperature(){
   replace_nan_with_null(raw_value_string);
   replace_nan_with_null(raw_instant_value_string);
   
-  snprintf(scratch, 511,
+  snprintf(scratch, 1023,
     "{"
     "\"serial-number\":\"%s\","
     "\"converted-value\":%s,"
@@ -4943,7 +5050,7 @@ boolean publishHumidity(){
   replace_nan_with_null(raw_value_string);
   replace_nan_with_null(raw_instant_value_string);
   
-  snprintf(scratch, 511, 
+  snprintf(scratch, 1023, 
     "{"
     "\"serial-number\":\"%s\","    
     "\"converted-value\":%s,"
@@ -5064,22 +5171,40 @@ void addSample(uint8_t sample_type, float value){
   }
 }
 
-
-void collectCO2(void){    
-  co2Serial.begin(9600);
-  clearCO2SerialInput();
-
-  //Serial.print("CO2:");
-  if(requestCO2Data(&instant_co2_ppm)){      
-    //Serial.print(instant_co2_ppm, 1);
-    addSample(CO2_SAMPLE_BUFFER, instant_co2_ppm);   
-    if(sample_buffer_idx == (sample_buffer_depth - 1)){
-      co2_ready = true;
+void collectCO2Equivalent(void){    
+  if(!iaqcore_failed && iaqcore_ok){
+    if(iaqcore.getStatus() == AMS_IAQ_CORE_C_STATUS_OK){
+      instant_co2_equivalent_ppm = iaqcore.getCO2EquivalentPPM();
+      addSample(CO2_EQUIVALENT_SAMPLE_BUFFER, instant_co2_equivalent_ppm);       
+      if(sample_buffer_idx == (sample_buffer_depth - 1)){
+        iaqcore_ready = true;
+      }
     }
   }
-  //Serial.println();
-  
-  co2Serial.end();  
+}
+
+void collectTVOC(void){    
+  if(!iaqcore_failed && iaqcore_ok){
+    if(iaqcore.getStatus() == AMS_IAQ_CORE_C_STATUS_OK){
+      instant_tvoc_ppb = iaqcore.getTVOCEquivalentPPB();
+      addSample(TVOC_SAMPLE_BUFFER, instant_tvoc_ppb);       
+      if(sample_buffer_idx == (sample_buffer_depth - 1)){
+        iaqcore_ready = true;
+      }
+    }
+  }
+}
+
+void collectResistance(void){    
+  if(!iaqcore_failed && iaqcore_ok){
+    if(iaqcore.getStatus() == AMS_IAQ_CORE_C_STATUS_OK){
+      instant_resistance_ohms = iaqcore.getResistanceOhms();
+      addSample(RESISTANCE_SAMPLE_BUFFER, instant_resistance_ohms);       
+      if(sample_buffer_idx == (sample_buffer_depth - 1)){
+        iaqcore_ready = true;
+      }
+    }
+  }
 }
 
 float pressure_scale_factor(void){
@@ -5108,7 +5233,7 @@ float pressure_scale_factor(void){
   return ret;
 }
 
-void co2_convert_to_ppm(float average, float * converted_value, float * temperature_compensated_value){
+void co2_equivalent_compensation(float average, float * converted_value, float * temperature_compensated_value){
   static boolean first_access = true;
   static float co2_zero_volts = 0.0f;
   if(first_access){   
@@ -5119,7 +5244,7 @@ void co2_convert_to_ppm(float average, float * converted_value, float * temperat
   // TODO: if we find there are temperature effects to compensate for, calculate parameters for compensation here
   // TODO: apply compensation formula using temperature dependant parameters here
 
-  // there's no interpretation needed for this sensor, we don't actually have any "raw" data
+  // there's no interpretation needed for this sensor
   *converted_value = average; 
   
   *temperature_compensated_value = *converted_value; // no compensation yet
@@ -5128,47 +5253,163 @@ void co2_convert_to_ppm(float average, float * converted_value, float * temperat
   }
 }
 
-boolean publishCO2(){
+void tvoc_compensation(float average, float * converted_value, float * temperature_compensated_value){
+  static boolean first_access = true;
+  static float co2_zero_volts = 0.0f;
+  if(first_access){   
+    co2_zero_volts = eeprom_read_float((const float *) EEPROM_CO2_CAL_OFFSET);
+    first_access = false;
+  }
+
+  // TODO: if we find there are temperature effects to compensate for, calculate parameters for compensation here
+  // TODO: apply compensation formula using temperature dependant parameters here
+
+  // there's no interpretation needed for this sensor
+  *converted_value = average; 
+  
+  *temperature_compensated_value = *converted_value; // no compensation yet
+  if(*temperature_compensated_value <= 0.0f){
+    *temperature_compensated_value = 0.0f;
+  }
+}
+
+void resistance_compensation(float average, float * converted_value, float * temperature_compensated_value){
+  static boolean first_access = true;
+  static float co2_zero_volts = 0.0f;
+  if(first_access){
+    co2_zero_volts = eeprom_read_float((const float *) EEPROM_CO2_CAL_OFFSET);
+    first_access = false;
+  }
+
+  // TODO: if we find there are temperature effects to compensate for, calculate parameters for compensation here
+  // TODO: apply compensation formula using temperature dependant parameters here
+
+  // there's no interpretation needed for this sensor
+  *converted_value = average; 
+  
+  *temperature_compensated_value = *converted_value; // no compensation yet
+  if(*temperature_compensated_value <= 0.0f){
+    *temperature_compensated_value = 0.0f;
+  }
+}
+
+boolean publishIAQCore(){
   clearTempBuffers();
   float converted_value = 0.0f, compensated_value = 0.0f;    
-  float co2_moving_average = calculateAverage(&(sample_buffer[CO2_SAMPLE_BUFFER][0]), sample_buffer_depth);
-  co2_convert_to_ppm(co2_moving_average, &converted_value, &compensated_value);
-  co2_ppm = compensated_value;  
-  //safe_dtostrf(co2_moving_average, -8, 5, raw_value_string, 16);
-  safe_dtostrf(converted_value, -8, 0, converted_value_string, 16);
-  safe_dtostrf(compensated_value, -8, 0, compensated_value_string, 16); 
-  safe_dtostrf(instant_co2_ppm, -8, 0, raw_instant_value_string, 16);
+
+  // equivalent co2
+  float co2_moving_average = calculateAverage(&(sample_buffer[CO2_EQUIVALENT_SAMPLE_BUFFER][0]), sample_buffer_depth);
+  co2_equivalent_compensation(co2_moving_average, &converted_value, &compensated_value);
+  co2_equivalent_ppm = compensated_value;  
+
+  safe_dtostrf(converted_value, -8, 2, converted_value_string, 16);     // the averaged value, not corrected for temperature effects
+  safe_dtostrf(compensated_value, -8, 2, compensated_value_string, 16); // the averaged value, corrected for temperature effects
+  safe_dtostrf(instant_co2_equivalent_ppm, -8, 2, raw_instant_value_string, 16); // the instantaneous value, not corrected for temperature effects
+
+  co2_equivalent_compensation(instant_co2_equivalent_ppm, &converted_value, &compensated_value); // re-compute on the instant value rather than the moving average value
+  safe_dtostrf(compensated_value, -8, 2, compensated_instant_value_string, 16); // the instantaneous value, corrected for temperature effects
+
+  // tvoc
+
+  float tvoc_moving_average = calculateAverage(&(sample_buffer[TVOC_SAMPLE_BUFFER][0]), sample_buffer_depth);
+  tvoc_compensation(tvoc_moving_average, &converted_value, &compensated_value);
+  tvoc_ppb = compensated_value;        
+
+  safe_dtostrf(converted_value, -8, 2, converted_value_string_2, 16);     // the averaged value, not corrected for temperature effects
+  safe_dtostrf(compensated_value, -8, 2, compensated_value_string_2, 16); // the averaged value, corrected for temperature effects
+  safe_dtostrf(instant_tvoc_ppb, -8, 2, raw_instant_value_string_2, 16); // the instantaneous value, not corrected for temperature effects
+
+  tvoc_compensation(instant_tvoc_ppb, &converted_value, &compensated_value); // re-compute on the instant value rather than the moving average value
+  safe_dtostrf(compensated_value, -8, 2, compensated_instant_value_string_2, 16); // the instantaneous value, corrected for temperature effects
+
+
+  // resistance
+
+  float resistance_moving_average = calculateAverage(&(sample_buffer[RESISTANCE_SAMPLE_BUFFER][0]), sample_buffer_depth);
+  resistance_compensation(resistance_moving_average, &converted_value, &compensated_value);
+  resistance_ohms = compensated_value;     
+
+  safe_dtostrf(converted_value, -8, 2, converted_value_string_3, 16);     // the averaged value, not corrected for temperature effects
+  safe_dtostrf(compensated_value, -8, 2, compensated_value_string_3, 16); // the averaged value, corrected for temperature effects
+  safe_dtostrf(instant_resistance_ohms, -8, 2, raw_instant_value_string_3, 16); // the instantaneous value, not corrected for temperature effects
+
+  resistance_compensation(instant_resistance_ohms, &converted_value, &compensated_value); // re-compute on the instant value rather than the moving average value
+  safe_dtostrf(compensated_value, -8, 2, compensated_instant_value_string_3, 16); // the instantaneous value, corrected for temperature effects
+
+  // clean up strings and compose message
   
   //trim_string(raw_value_string);
   trim_string(converted_value_string);
   trim_string(compensated_value_string);  
   trim_string(raw_instant_value_string);
+  trim_string(compensated_instant_value_string);
+
+  trim_string(converted_value_string_2);
+  trim_string(compensated_value_string_2);  
+  trim_string(raw_instant_value_string_2);
+  trim_string(compensated_instant_value_string_2);
+
+  trim_string(converted_value_string_3);
+  trim_string(compensated_value_string_3);  
+  trim_string(raw_instant_value_string_3);
+  trim_string(compensated_instant_value_string_3);  
   
   //replace_nan_with_null(raw_value_string);
   replace_nan_with_null(converted_value_string);
   replace_nan_with_null(compensated_value_string);
   replace_nan_with_null(raw_instant_value_string);
+  replace_nan_with_null(compensated_instant_value_string);
   
-  snprintf(scratch, 511, 
+  replace_nan_with_null(converted_value_string_2);
+  replace_nan_with_null(compensated_value_string_2);
+  replace_nan_with_null(raw_instant_value_string_2);
+  replace_nan_with_null(compensated_instant_value_string_2);
+
+  replace_nan_with_null(converted_value_string_3);
+  replace_nan_with_null(compensated_value_string_3);
+  replace_nan_with_null(raw_instant_value_string_3);
+  replace_nan_with_null(compensated_instant_value_string_3);
+      
+  snprintf(scratch, 1023, 
     "{"
     "\"serial-number\":\"%s\","   
-    "\"raw-instant-value\":%s,"    
-    "\"converted-value\":%s,"
-    "\"converted-units\":\"ppm\","    
-    "\"compensated-value\":%s,"
-    "\"sensor-part-number\":\"SE-0018\""
+    "\"raw-instant-co2\":%s,"    
+    "\"converted-co2\":%s,"
+    "\"compensated-co2\":%s,"
+    "\"compensated-instant-co2\":%s,"
+    "\"raw-instant-tvoc\":%s,"    
+    "\"converted-tvoc\":%s,"
+    "\"compensated-tvoc\":%s,"
+    "\"compensated-instant-tvoc\":%s,"
+    "\"raw-instant-resistance\":%s,"    
+    "\"converted-resistance\":%s,"
+    "\"compensated-resistance\":%s,"
+    "\"compensated-instant-resistance\":%s,"        
+    "\"co2-units\":\"ppm\","    
+    "\"tvoc-units\":\"ppb\","    
+    "\"resistance-units\":\"ohm\","        
+    "\"sensor-part-number\":\"AMS iAQ-core C\""
     "%s"
     "}",
     mqtt_client_id,    
     raw_instant_value_string,
     converted_value_string, 
     compensated_value_string,
+    compensated_instant_value_string,
+    raw_instant_value_string_2,
+    converted_value_string_2, 
+    compensated_value_string_2,
+    compensated_instant_value_string_2,
+    raw_instant_value_string_3,
+    converted_value_string_3, 
+    compensated_value_string_3,
+    compensated_instant_value_string_3,        
     gps_mqtt_string);  
 
   replace_character(scratch, '\'', '\"'); // replace single quotes with double quotes
   
   strcat(MQTT_TOPIC_STRING, MQTT_TOPIC_PREFIX);
-  strcat(MQTT_TOPIC_STRING, "co2");    
+  strcat(MQTT_TOPIC_STRING, "voc");    
   if(mqtt_suffix_enabled){
     strcat(MQTT_TOPIC_STRING, "/");      
     strcat(MQTT_TOPIC_STRING, mqtt_client_id);      
@@ -5269,12 +5510,12 @@ void loop_wifi_mqtt_mode(void){
         }
         
         
-        if(co2_ready){
-          if(!publishCO2()){
+        if(iaqcore_ready){
+          if(!publishIAQCore()){
             Serial.println(F("Error: Failed to publish CO2."));                    
           }
           else{
-            updateLCD(co2_ppm, 5, 1, 5);  
+            updateLCD(co2_equivalent_ppm, 5, 1, 5);  
           }
         }
         else{
@@ -5403,18 +5644,52 @@ void printCsvDataLine(){
   appendToString("," , dataString, &dataStringRemaining);
   
   float co2_moving_average = 0.0f;
-  if(co2_ready){
+  float tvoc_moving_average = 0.0f;
+  float resistance_moving_average = 0.0f;
+  if(iaqcore_ready){
     float converted_value = 0.0f, compensated_value = 0.0f;    
-    co2_moving_average = calculateAverage(&(sample_buffer[CO2_SAMPLE_BUFFER][0]), sample_buffer_depth);
-    co2_convert_to_ppm(co2_moving_average, &converted_value, &compensated_value);
-    co2_ppm = compensated_value;        
+    co2_moving_average = calculateAverage(&(sample_buffer[CO2_EQUIVALENT_SAMPLE_BUFFER][0]), sample_buffer_depth);
+    co2_equivalent_compensation(co2_moving_average, &converted_value, &compensated_value);
+    co2_equivalent_ppm = compensated_value;        
+
+    tvoc_moving_average = calculateAverage(&(sample_buffer[TVOC_SAMPLE_BUFFER][0]), sample_buffer_depth);
+    tvoc_compensation(tvoc_moving_average, &converted_value, &compensated_value);
+    tvoc_ppb = compensated_value;        
+
+    resistance_moving_average = calculateAverage(&(sample_buffer[RESISTANCE_SAMPLE_BUFFER][0]), sample_buffer_depth);
+    resistance_compensation(resistance_moving_average, &converted_value, &compensated_value);
+    resistance_ohms = compensated_value;            
     
     Serial.print(co2_moving_average, 0);
-    appendToString(co2_moving_average, 0, dataString, &dataStringRemaining);    
+    appendToString(co2_moving_average, 0, dataString, &dataStringRemaining);
+
+    Serial.print(F(","));
+    appendToString("," , dataString, &dataStringRemaining);        
+
+    Serial.print(tvoc_moving_average, 0);
+    appendToString(tvoc_moving_average, 0, dataString, &dataStringRemaining);
+
+    Serial.print(F(","));
+    appendToString("," , dataString, &dataStringRemaining);        
+
+    Serial.print(resistance_moving_average, 0);
+    appendToString(resistance_moving_average, 0, dataString, &dataStringRemaining);  
   }
   else{
     Serial.print(F("---"));
     appendToString("---", dataString, &dataStringRemaining);
+    
+    Serial.print(F(","));
+    appendToString("," , dataString, &dataStringRemaining);     
+
+    Serial.print(F("---"));
+    appendToString("---", dataString, &dataStringRemaining);
+    
+    Serial.print(F(","));
+    appendToString("," , dataString, &dataStringRemaining);   
+
+    Serial.print(F("---"));
+    appendToString("---", dataString, &dataStringRemaining);             
   }
 
   Serial.print(F(","));
@@ -5618,8 +5893,8 @@ void downloadFile(char * hostname, uint16_t port, char * filename, void (*respon
   */ 
   esp.connect(hostname, port);
   if (esp.connected()) {   
-    memset(scratch, 0, 512);
-    snprintf(scratch, 511, "GET /%s HTTP/1.1\r\nHost: %s\r\n\r\n\r\n", filename, hostname);        
+    memset(scratch, 0, 1024);
+    snprintf(scratch, 1023, "GET /%s HTTP/1.1\r\nHost: %s\r\n\r\n\r\n", filename, hostname);        
     esp.print(scratch);
     //Serial.print(scratch);    
   } else {
@@ -6228,157 +6503,6 @@ void getNetworkTime(void){
   else{
     Serial.print(F("Failed."));
   }
-}
-
-/****** CO2 SENSOR SUPPORT FUNCTIONS ******/
-void clearCO2SerialInput(){
-  while(co2Serial.available()){
-    co2Serial.read();
-  }
-}
-
-boolean requestCO2Data(float * co2_ppm){
-  uint8_t readCO2[] = {0xFE, 0x44, 0x00, 0x08, 0x02, 0x9F, 0x25};  // Command packet to read Co2 (see app note)
-  uint8_t response[] = {0,0,0,0,0,0,0};                            // Create an array to store the response    
-  // try up to retry times
-  const uint8_t retries = 5;
-  for(uint8_t ii = 0; ii < retries; ii++){
-    if(co2SendRequest(readCO2)){                  
-      // there is the beginning of a response at least
-      if(co2ConsumeResponse(response)){
-        // there's a complete response at least
-        if(co2ValidResponse(response)){
-          // there's a valid response, we have a winner
-          *co2_ppm = co2GetValue(response);
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
-// sends the request command 
-// returns true the sensor starts responding within 50ms
-boolean co2SendRequest(uint8_t * request){ 
-  co2Serial.write(request, 7);
-  unsigned long start = millis();
-  const long timeout_interval = 50;
-
-  while(1){
-    unsigned long currentMillis = millis();
-    
-    if(co2Serial.available()){      
-      // exit with true as soon as you get some bytes back
-      return true;   
-    }
-    
-    if(currentMillis - start >= timeout_interval) {  
-      // exit with false if you get a timeout 
-      return false;
-    }           
-  }
-  
-  return false;
-}
-
-boolean co2ConsumeResponse(uint8_t * response){
-  // expect a response that starts with 0xFE
-  // expect a response that is 7 bytes long
-  // expect a response to complete within 100ms
-  uint8_t bytes_received = 0;
-  unsigned long start = millis();
-  const long timeout_interval = 100;
-  while(bytes_received < 7){
-    unsigned long currentMillis = millis();
-    if(currentMillis - start >= timeout_interval) {  
-      return false;
-    }
-    
-    if(co2Serial.available()){
-      uint8_t value = co2Serial.read();
-      if((bytes_received == 0) && (value != 0xFE)){ // reject bytes until synchronized
-        continue;
-      }
-      else{
-        response[bytes_received++] = value;
-      }
-    }
-  }
-
-  return true;
-}
-
-uint16_t co2GetValue(uint8_t * response){
-  uint8_t high = response[3]; // high byte for value is 4th byte in packet in the packet
-  uint8_t low  = response[4]; // low byte for value is 5th byte in the packet
-  
-  uint16_t ret = high;  
-  ret <<= 8;   // shift the low byte into the high byte 
-  ret |= low;  // mask in the low byte
-  return ret;  // return the result
-}
-
-boolean co2ValidResponse(uint8_t * response){
-  uint16_t crc = response[6] * 256 + response[5];
-  if(co2_CRC16(response, 5) != crc){
-    return false;
-  }
-
-  if(co2GetValue(response) > 10000){
-    return false;
-  }
-
-  return true;
-}
-
-uint16_t co2_CRC16 (const uint8_t *nData, uint16_t wLength)
-{
-  static const uint16_t wCRCTable[] = {
-     0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241,
-     0xC601, 0x06C0, 0x0780, 0xC741, 0x0500, 0xC5C1, 0xC481, 0x0440,
-     0xCC01, 0x0CC0, 0x0D80, 0xCD41, 0x0F00, 0xCFC1, 0xCE81, 0x0E40,
-     0x0A00, 0xCAC1, 0xCB81, 0x0B40, 0xC901, 0x09C0, 0x0880, 0xC841,
-     0xD801, 0x18C0, 0x1980, 0xD941, 0x1B00, 0xDBC1, 0xDA81, 0x1A40,
-     0x1E00, 0xDEC1, 0xDF81, 0x1F40, 0xDD01, 0x1DC0, 0x1C80, 0xDC41,
-     0x1400, 0xD4C1, 0xD581, 0x1540, 0xD701, 0x17C0, 0x1680, 0xD641,
-     0xD201, 0x12C0, 0x1380, 0xD341, 0x1100, 0xD1C1, 0xD081, 0x1040,
-     0xF001, 0x30C0, 0x3180, 0xF141, 0x3300, 0xF3C1, 0xF281, 0x3240,
-     0x3600, 0xF6C1, 0xF781, 0x3740, 0xF501, 0x35C0, 0x3480, 0xF441,
-     0x3C00, 0xFCC1, 0xFD81, 0x3D40, 0xFF01, 0x3FC0, 0x3E80, 0xFE41,
-     0xFA01, 0x3AC0, 0x3B80, 0xFB41, 0x3900, 0xF9C1, 0xF881, 0x3840,
-     0x2800, 0xE8C1, 0xE981, 0x2940, 0xEB01, 0x2BC0, 0x2A80, 0xEA41,
-     0xEE01, 0x2EC0, 0x2F80, 0xEF41, 0x2D00, 0xEDC1, 0xEC81, 0x2C40,
-     0xE401, 0x24C0, 0x2580, 0xE541, 0x2700, 0xE7C1, 0xE681, 0x2640,
-     0x2200, 0xE2C1, 0xE381, 0x2340, 0xE101, 0x21C0, 0x2080, 0xE041,
-     0xA001, 0x60C0, 0x6180, 0xA141, 0x6300, 0xA3C1, 0xA281, 0x6240,
-     0x6600, 0xA6C1, 0xA781, 0x6740, 0xA501, 0x65C0, 0x6480, 0xA441,
-     0x6C00, 0xACC1, 0xAD81, 0x6D40, 0xAF01, 0x6FC0, 0x6E80, 0xAE41,
-     0xAA01, 0x6AC0, 0x6B80, 0xAB41, 0x6900, 0xA9C1, 0xA881, 0x6840,
-     0x7800, 0xB8C1, 0xB981, 0x7940, 0xBB01, 0x7BC0, 0x7A80, 0xBA41,
-     0xBE01, 0x7EC0, 0x7F80, 0xBF41, 0x7D00, 0xBDC1, 0xBC81, 0x7C40,
-     0xB401, 0x74C0, 0x7580, 0xB541, 0x7700, 0xB7C1, 0xB681, 0x7640,
-     0x7200, 0xB2C1, 0xB381, 0x7340, 0xB101, 0x71C0, 0x7080, 0xB041,
-     0x5000, 0x90C1, 0x9181, 0x5140, 0x9301, 0x53C0, 0x5280, 0x9241,
-     0x9601, 0x56C0, 0x5780, 0x9741, 0x5500, 0x95C1, 0x9481, 0x5440,
-     0x9C01, 0x5CC0, 0x5D80, 0x9D41, 0x5F00, 0x9FC1, 0x9E81, 0x5E40,
-     0x5A00, 0x9AC1, 0x9B81, 0x5B40, 0x9901, 0x59C0, 0x5880, 0x9841,
-     0x8801, 0x48C0, 0x4980, 0x8941, 0x4B00, 0x8BC1, 0x8A81, 0x4A40,
-     0x4E00, 0x8EC1, 0x8F81, 0x4F40, 0x8D01, 0x4DC0, 0x4C80, 0x8C41,
-     0x4400, 0x84C1, 0x8581, 0x4540, 0x8701, 0x47C0, 0x4680, 0x8641,
-     0x8201, 0x42C0, 0x4380, 0x8341, 0x4100, 0x81C1, 0x8081, 0x4040 };
-
-   uint8_t nTemp;
-   uint16_t wCRCWord = 0xFFFF;
-
-   while (wLength--)
-   {
-      nTemp = *nData++ ^ wCRCWord;
-      wCRCWord >>= 8;
-      wCRCWord  ^= wCRCTable[nTemp];
-   }
-   return wCRCWord;
 }
 
 /*
