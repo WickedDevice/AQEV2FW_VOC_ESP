@@ -129,7 +129,7 @@ typedef struct{
   float intercept_volts;      // and this intercept
                               // to calculate the baseline voltage
 } baseline_voltage_t;
-baseline_voltage_t baseline_voltage_struct; // scratch space for a single baseline_voltage_t entry
+baseline_voltage_t baseline_value_struct; // scratch space for a single baseline_voltage_t entry
 
 #define BACKLIGHT_OFF_AT_STARTUP (0)
 #define BACKLIGHT_ON_AT_STARTUP  (1)
@@ -165,11 +165,11 @@ uint8_t mode = MODE_OPERATIONAL;
 #define EEPROM_STATIC_DNS         (EEPROM_STATIC_GATEWAY - 4)     // static dns server ip address, 4 bytes
 #define EEPROM_MQTT_PASSWORD      (EEPROM_STATIC_DNS - 32)        // password for mqtt server, up to 32 characters (one of which is a null terminator)
 #define EEPROM_CO2_SENSITIVITY    (EEPROM_MQTT_PASSWORD - 4)      // float value, 4-bytes, the sensitivity from the sticker  [UNUSED]
-#define EEPROM_CO2_CAL_SLOPE      (EEPROM_CO2_SENSITIVITY - 4)    // float value, 4-bytes, the slope applied to the sensor   [UNUSED] 
+#define EEPROM_CO2_CAL_SLOPE      (EEPROM_CO2_SENSITIVITY - 4)    // float value, 4-bytes, the slope applied to the sensor    
 #define EEPROM_CO2_CAL_OFFSET     (EEPROM_CO2_CAL_SLOPE - 4)      // float value, 4-btyes, the offset applied to the sensor
 #define EEPROM_TVOC_SENSITIVITY   (EEPROM_CO2_CAL_OFFSET - 4)     // float value, 4-bytes, the sensitivity from the sticker  [UNUSED]
-#define EEPROM_TVOC_CAL_SLOPE     (EEPROM_TVOC_SENSITIVITY - 4)     // float value, 4-bytes, the slope applied to the sensor   [UNUSED]
-#define EEPROM_TVOC_CAL_OFFSET    (EEPROM_TVOC_CAL_SLOPE - 4)       // float value, 4-bytes, the offset applied to the sensor  [UNUSED] 
+#define EEPROM_TVOC_CAL_SLOPE     (EEPROM_TVOC_SENSITIVITY - 4)     // float value, 4-bytes, the slope applied to the sensor   
+#define EEPROM_TVOC_CAL_OFFSET    (EEPROM_TVOC_CAL_SLOPE - 4)       // float value, 4-bytes, the offset applied to the sensor   
 #define EEPROM_PRIVATE_KEY        (EEPROM_TVOC_CAL_OFFSET - 32)     // 32-bytes of Random Data (256-bits)
 #define EEPROM_MQTT_SERVER_NAME   (EEPROM_PRIVATE_KEY - 32)       // string, the DNS name of the MQTT server (default mqtt.opensensors.io), up to 32 characters (one of which is a null terminator)
 #define EEPROM_MQTT_USERNAME      (EEPROM_MQTT_SERVER_NAME - 32)  // string, the user name for the MQTT server (default wickeddevice), up to 32 characters (one of which is a null terminator)
@@ -196,11 +196,17 @@ uint8_t mode = MODE_OPERATIONAL;
 #define EEPROM_MQTT_TOPIC_SUFFIX_ENABLED  (EEPROM_CO2_BASELINE_VOLTAGE_TABLE - 1) 
 #define EEPROM_TVOC_BASELINE_VOLTAGE_TABLE (EEPROM_MQTT_TOPIC_SUFFIX_ENABLED - (5*sizeof(baseline_voltage_t))) // array of (up to) five structures for baseline offset characterization over temperature
 #define EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE (EEPROM_TVOC_BASELINE_VOLTAGE_TABLE - (5*sizeof(baseline_voltage_t))) // array of (up to) five structures for baseline offset characterization over temperature
+#define EEPROM_RESISTANCE_SENSITIVITY   (EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE - 4)     // float value, 4-bytes, the sensitivity from the sticker  [UNUSED]
+#define EEPROM_RESISTANCE_CAL_SLOPE     (EEPROM_RESISTANCE_SENSITIVITY - 4)     // float value, 4-bytes, the slope applied to the sensor   
+#define EEPROM_RESISTANCE_CAL_OFFSET    (EEPROM_RESISTANCE_CAL_SLOPE - 4)       // float value, 4-bytes, the offset applied to the sensor   
 //  /\
 //   L Add values up here by subtracting offsets to previously added values
 //   * ... and make sure the addresses don't collide and start overlapping!
 //   T Add values down here by adding offsets to previously added values
 //  \/
+#define EEPROM_BACKUP_RESISTANCE_CAL_OFFSET    (EEPROM_BACKUP_RESISTANCE_CAL_SLOPE + 4)
+#define EEPROM_BACKUP_RESISTANCE_CAL_SLOPE     (EEPROM_BACKUP_RESISTANCE_SENSITIVITY + 4)
+#define EEPROM_BACKUP_RESISTANCE_SENSITIVITY   (EEPROM_BACKUP_NTP_TZ_OFFSET_HRS + 4)
 #define EEPROM_BACKUP_NTP_TZ_OFFSET_HRS  (EEPROM_BACKUP_HUMIDITY_OFFSET + 4)
 #define EEPROM_BACKUP_HUMIDITY_OFFSET    (EEPROM_BACKUP_TEMPERATURE_OFFSET + 4)
 #define EEPROM_BACKUP_TEMPERATURE_OFFSET (EEPROM_BACKUP_PRIVATE_KEY + 32)
@@ -280,6 +286,7 @@ void set_ntp_timezone_offset(char * arg);
 void set_update_server_name(char * arg);
 void co2_baseline_voltage_characterization_command(char * arg);
 void tvoc_baseline_voltage_characterization_command(char * arg);
+void res_baseline_voltage_characterization_command(char * arg);
 void topic_suffix_config(char * arg);
 
 // Note to self:
@@ -341,7 +348,8 @@ const char cmd_string_altitude[] PROGMEM    = "altitude   ";
 const char cmd_string_ntpsrv[] PROGMEM      = "ntpsrv     ";
 const char cmd_string_tz_off[] PROGMEM      = "tz_off     ";
 const char cmd_string_co2_blv[] PROGMEM     = "co2_blv    ";
-const char cmd_string_tvoc_blv[] PROGMEM    = "tvoc_blv    ";
+const char cmd_string_tvoc_blv[] PROGMEM    = "tvoc_blv   ";
+const char cmd_string_res_blv[] PROGMEM     = "res_blv    ";
 const char cmd_string_null[] PROGMEM        = "";
 
 PGM_P const commands[] PROGMEM = {
@@ -387,6 +395,7 @@ PGM_P const commands[] PROGMEM = {
   cmd_string_tz_off,
   cmd_string_co2_blv, 
   cmd_string_tvoc_blv, 
+  cmd_string_res_blv,
   cmd_string_null
 };
 
@@ -433,6 +442,7 @@ void (*command_functions[])(char * arg) = {
   set_ntp_timezone_offset,
   co2_baseline_voltage_characterization_command,
   tvoc_baseline_voltage_characterization_command,
+  res_baseline_voltage_characterization_command,
   0
 };
 
@@ -812,7 +822,7 @@ void setup() {
   
   if(mode == SUBMODE_NORMAL){
     setLCD_P(PSTR("TEMP ---  RH ---"
-                  "VOC ---  CO2 ---"));           
+                  "CO2 ---  VOC ---"));           
     SUCCESS_MESSAGE_DELAY();                      
   }
   
@@ -1437,7 +1447,6 @@ void help_menu(char * arg) {
       get_help_indent(); Serial.println(F("mac - the MAC address of the ESP8266"));
       get_help_indent(); Serial.println(F("method - the Wi-Fi connection method"));
       get_help_indent(); Serial.println(F("ssid - the Wi-Fi SSID to connect to"));
-      get_help_indent(); Serial.println(F("pwd - lol, sorry, that's not happening!"));
       get_help_indent(); Serial.println(F("security - the Wi-Fi security mode"));
       get_help_indent(); Serial.println(F("ipmode - the Wi-Fi IP-address mode"));
       get_help_indent(); Serial.println(F("mqttsrv - MQTT server name"));
@@ -1451,7 +1460,6 @@ void help_menu(char * arg) {
       get_help_indent(); Serial.println(F("co2_off - CO2 sensors offset [V]"));
       get_help_indent(); Serial.println(F("temp_off - Temperature sensor reporting offset [degC] (subtracted)"));
       get_help_indent(); Serial.println(F("hum_off - Humidity sensor reporting offset [%] (subtracted)"));      
-      get_help_indent(); Serial.println(F("key - lol, sorry, that's also not happening!"));
       get_help_indent(); Serial.println(F("opmode - the Operational Mode the Egg is configured for"));
       get_help_indent(); Serial.println(F("tempunit - the unit of measure Temperature is reported in (F or C)"));      
       get_help_indent(); Serial.println(F("backlight - the backlight behavior settings (duration, mode)"));
@@ -1461,8 +1469,6 @@ void help_menu(char * arg) {
       get_help_indent(); Serial.println(F("avgint - the sensor averaging interval in seconds"));
       get_help_indent(); Serial.println(F("altitude - the altitude of the sensor in meters above sea level"));
       get_help_indent(); Serial.println(F("ntpsrv - the NTP server name"));
-      get_help_indent(); Serial.println(F("tz_off - the timezone offset for use with NTP in decimal hours"));      
-      get_help_indent(); Serial.println(F("co2_blv - the co2 baseline voltage characterization"));
       get_help_indent(); Serial.println(F("result: the current, human-readable, value of <param>"));
       get_help_indent(); Serial.println(F("        is printed to the console."));
     }
@@ -1504,6 +1510,8 @@ void help_menu(char * arg) {
       defaults_help_indent(); Serial.println(F("restore updatefile"));         
       defaults_help_indent(); Serial.println(F("restore key"));
       defaults_help_indent(); Serial.println(F("restore co2'"));
+      defaults_help_indent(); Serial.println(F("restore tvoc'"));
+      defaults_help_indent(); Serial.println(F("restore resistance'"));
       defaults_help_indent(); Serial.println(F("clears the SSID from memory"));
       defaults_help_indent(); Serial.println(F("clears the Network Password from memory"));
       get_help_indent(); Serial.println(F("mac        - retrieves the mac address from BACKUP"));
@@ -1512,9 +1520,11 @@ void help_menu(char * arg) {
       get_help_indent(); Serial.println(F("updatesrv  - restores the Update server name"));          
       get_help_indent(); Serial.println(F("updatefile - restores the Update filename"));           
       get_help_indent(); Serial.println(F("key        - restores the Private Key from BACKUP "));
-      get_help_indent(); Serial.println(F("co2         - restores the CO2 calibration parameters from BACKUP "));
+      get_help_indent(); Serial.println(F("co2        - restores the CO2 calibration parameters from BACKUP "));
+      get_help_indent(); Serial.println(F("tvoc       - restores the TVOC calibration parameters from BACKUP "));
+      get_help_indent(); Serial.println(F("res        - restores the Resistance calibration parameters from BACKUP "));
       get_help_indent(); Serial.println(F("temp_off   - restores the Temperature reporting offset from BACKUP "));
-      get_help_indent(); Serial.println(F("hum_off    - restores the Humidity reporting offset from BACKUP "));      
+      get_help_indent(); Serial.println(F("hum_off    - restores the Humidity reporting offset from BACKUP "));
     }
     else if (strncmp("mac", arg, 3) == 0) {
       Serial.println(F("mac <address>"));
@@ -1677,6 +1687,7 @@ void help_menu(char * arg) {
       get_help_indent(); Serial.println(F("mac      - backs up the ESP8266 MAC address"));
       get_help_indent(); Serial.println(F("key      - backs up the 256-bit private key"));
       get_help_indent(); Serial.println(F("co2      - backs up the CO2 calibration parameters"));    
+      get_help_indent(); Serial.println(F("tvoc     - backs up the TVOC calibration parameters"));    
       get_help_indent(); Serial.println(F("temp     - backs up the Temperature calibration parameters"));
       get_help_indent(); Serial.println(F("hum      - backs up the Humidity calibration parameters"));  
       get_help_indent(); Serial.println(F("tz       - backs up the Timezone offset for NTP"));    
@@ -1684,8 +1695,28 @@ void help_menu(char * arg) {
     }
     else if (strncmp("co2_off", arg, 7) == 0) {
       Serial.println(F("co2_off <number>"));
-      Serial.println(F("   <number> is the decimal value of CO2 sensor offset [V]"));
+      Serial.println(F("   <number> is the decimal value of CO2  Equivalent transform offset [ppm]"));
     }
+    else if (strncmp("co2_slope", arg, 9) == 0) {
+      Serial.println(F("co2_slope <number>"));
+      Serial.println(F("   <number> is the decimal value of CO2 Equivalent transform slope [ppm/ppm]"));
+    }
+    else if (strncmp("tvoc_off", arg, 8) == 0) {
+      Serial.println(F("tvoc_off <number>"));
+      Serial.println(F("   <number> is the decimal value of TVOC transform offset [ppb]"));
+    }
+    else if (strncmp("tvoc_slope", arg, 10) == 0) {
+      Serial.println(F("tvoc_slope <number>"));
+      Serial.println(F("   <number> is the decimal value of TVOC transform slope [ppb/ppb]"));
+    }           
+    else if (strncmp("res_off", arg, 7) == 0) {
+      Serial.println(F("res_off <number>"));
+      Serial.println(F("   <number> is the decimal value of Resistancee transform offset [ohms]"));
+    }
+    else if (strncmp("res_slope", arg, 9) == 0) {
+      Serial.println(F("res_slope <number>"));
+      Serial.println(F("   <number> is the decimal value of Resistancee transform slope [ohms/ohm]"));
+    }                 
     else if (strncmp("temp_off", arg, 8) == 0) {
       Serial.println(F("temp_off <number>"));
       get_help_indent(); Serial.println(F("<number> is the decimal value of Temperature sensor reporting offset [degC] (subtracted)"));
@@ -1734,6 +1765,24 @@ void help_menu(char * arg) {
       get_help_indent(); Serial.println(F("co2_blv clear"));
       get_help_indent(); Serial.println(F("    erases the contents of the characterization table"));
     }
+    else if (strncmp("tvoc_blv", arg, 8) == 0) {
+      get_help_indent(); Serial.println(F("<sub-command> is one of 'add', 'clear', 'show'"));
+      get_help_indent(); Serial.println(F("tvoc_blv add [temperature] [slope] [intercept]"));
+      get_help_indent(); Serial.println(F("    adds a row to the characterization table"));
+      get_help_indent(); Serial.println(F("tvoc_blv show"));
+      get_help_indent(); Serial.println(F("    displays the current characterization table"));
+      get_help_indent(); Serial.println(F("tvoc_blv clear"));
+      get_help_indent(); Serial.println(F("    erases the contents of the characterization table"));
+    }  
+    else if (strncmp("res_blv", arg, 7) == 0) {
+      get_help_indent(); Serial.println(F("<sub-command> is one of 'add', 'clear', 'show'"));
+      get_help_indent(); Serial.println(F("res_blv add [temperature] [slope] [intercept]"));
+      get_help_indent(); Serial.println(F("    adds a row to the characterization table"));
+      get_help_indent(); Serial.println(F("res_blv show"));
+      get_help_indent(); Serial.println(F("    displays the current characterization table"));
+      get_help_indent(); Serial.println(F("res_blv clear"));
+      get_help_indent(); Serial.println(F("    erases the contents of the characterization table"));
+    }      
     else if (strncmp("backlight", arg, 9) == 0){
       Serial.println(F("backlight <config>"));
       get_help_indent(); Serial.println(F("<config> is one of:"));      
@@ -2238,6 +2287,12 @@ void print_eeprom_value(char * arg) {
     Serial.print(F("    ")); Serial.println(F("TVOC Baseline Voltage Characterization:"));
     print_baseline_voltage_characterization(EEPROM_TVOC_BASELINE_VOLTAGE_TABLE);
 
+    print_label_with_star_if_not_backed_up("Resistance Offset [ohms]: ", BACKUP_STATUS_TVOC_CALIBRATION_BIT);
+    print_eeprom_float((const float *) EEPROM_RESISTANCE_CAL_OFFSET);
+
+    print_label_with_star_if_not_backed_up("Resistance Slope [ohms/ohm]: ", BACKUP_STATUS_TVOC_CALIBRATION_BIT);
+    print_eeprom_float((const float *) EEPROM_RESISTANCE_CAL_SLOPE);
+
     Serial.print(F("    ")); Serial.println(F("Resistance Baseline Voltage Characterization:"));
     print_baseline_voltage_characterization(EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE);
     
@@ -2335,7 +2390,9 @@ void restore(char * arg) {
     configInject("restore updatefile\r");    
     configInject("restore key\r");
     configInject("restore co2\r");
-    configInject("restore mac\r");
+    configInject("restore tvoc\r");
+    configInject("restore res\r");
+    configInject("restore mac\r");   
 
     eeprom_write_block(blank, (void *) EEPROM_SSID, 32); // clear the SSID
     eeprom_write_block(blank, (void *) EEPROM_NETWORK_PWD, 32); // clear the Network Password
@@ -2398,7 +2455,7 @@ void restore(char * arg) {
     eeprom_write_block("update.wickeddevice.com", (void *) EEPROM_UPDATE_SERVER_NAME, 32);
   }  
   else if (strncmp("updatefile", arg, 10) == 0) {
-    eeprom_write_block("aqev2_co2_esp", (void *) EEPROM_UPDATE_FILENAME, 32);
+    eeprom_write_block("aqev2_voc_esp", (void *) EEPROM_UPDATE_FILENAME, 32);
   }  
   else if (strncmp("key", arg, 3) == 0) {
     if (!BIT_IS_CLEARED(backup_check, BACKUP_STATUS_PRIVATE_KEY_BIT)) {
@@ -2411,15 +2468,69 @@ void restore(char * arg) {
     eeprom_write_block(tmp, (void *) EEPROM_PRIVATE_KEY, 32);
   }
   else if (strncmp("co2", arg, 3) == 0) {
+    float current_value = eeprom_read_float((const float *) EEPROM_CO2_CAL_OFFSET);
+    if(isnan(current_value)){
+      eeprom_write_float((float *) EEPROM_CO2_CAL_OFFSET, 0.0f);
+    }
+    current_value = eeprom_read_float((const float *) EEPROM_CO2_CAL_SLOPE);
+    if(isnan(current_value)){
+      eeprom_write_float((float *) EEPROM_CO2_CAL_SLOPE, 1.0f);
+    }
+ 
+    
     if (!BIT_IS_CLEARED(backup_check, BACKUP_STATUS_CO2_CALIBRATION_BIT)) {
       Serial.println(F("Error: CO2 calibration must be backed up  "));
       Serial.println(F("       prior to executing a 'restore'."));
       return;
     }
 
-    eeprom_read_block(tmp, (const void *) EEPROM_BACKUP_CO2_CAL_OFFSET, 4);
-    eeprom_write_block(tmp, (void *) EEPROM_CO2_CAL_OFFSET, 4);
+    eeprom_read_block(tmp, (const void *) EEPROM_BACKUP_CO2_CAL_OFFSET, 4);  
+    eeprom_write_block(tmp, (void *) EEPROM_CO2_CAL_OFFSET, 4);    
+    eeprom_read_block(tmp, (const void *) EEPROM_BACKUP_CO2_CAL_SLOPE, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_CO2_CAL_SLOPE, 4);       
   }
+  else if (strncmp("tvoc", arg, 4) == 0) {
+    float current_value = eeprom_read_float((const float *) EEPROM_TVOC_CAL_OFFSET);
+    if(isnan(current_value)){
+      eeprom_write_float((float *) EEPROM_TVOC_CAL_OFFSET, 0.0f);
+    }
+    current_value = eeprom_read_float((const float *) EEPROM_TVOC_CAL_SLOPE);
+    if(isnan(current_value)){
+      eeprom_write_float((float *) EEPROM_TVOC_CAL_SLOPE, 1.0f);
+    }  
+        
+    if (!BIT_IS_CLEARED(backup_check, BACKUP_STATUS_TVOC_CALIBRATION_BIT)) {
+      Serial.println(F("Error: TVOC calibration must be backed up  "));
+      Serial.println(F("       prior to executing a 'restore'."));
+      return;
+    }
+
+    eeprom_read_block(tmp, (const void *) EEPROM_BACKUP_TVOC_CAL_OFFSET, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_TVOC_CAL_OFFSET, 4);
+    eeprom_read_block(tmp, (const void *) EEPROM_BACKUP_TVOC_CAL_SLOPE, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_TVOC_CAL_SLOPE, 4);      
+  }
+  else if (strncmp("res", arg, 3) == 0) {
+    float current_value = eeprom_read_float((const float *) EEPROM_RESISTANCE_CAL_OFFSET);
+    if(isnan(current_value)){
+      eeprom_write_float((float *) EEPROM_RESISTANCE_CAL_OFFSET, 0.0f);
+    }
+    current_value = eeprom_read_float((const float *) EEPROM_RESISTANCE_CAL_SLOPE);
+    if(isnan(current_value)){
+      eeprom_write_float((float *) EEPROM_RESISTANCE_CAL_SLOPE, 1.0f);
+    }     
+    
+    if (!BIT_IS_CLEARED(backup_check, BACKUP_STATUS_TVOC_CALIBRATION_BIT)) {
+      Serial.println(F("Error: TVOC calibration must be backed up  "));
+      Serial.println(F("       prior to executing a 'restore'."));
+      return;
+    }
+
+    eeprom_read_block(tmp, (const void *) EEPROM_BACKUP_RESISTANCE_CAL_OFFSET, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_RESISTANCE_CAL_OFFSET, 4);
+    eeprom_read_block(tmp, (const void *) EEPROM_BACKUP_RESISTANCE_CAL_SLOPE, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_RESISTANCE_CAL_SLOPE, 4);     
+  }    
   else if (strncmp("temp_off", arg, 8) == 0) {
     if (!BIT_IS_CLEARED(backup_check, BACKUP_STATUS_TEMPERATURE_CALIBRATION_BIT)) {
       Serial.println(F("Error: Temperature reporting offset should be backed up  "));
@@ -3568,11 +3679,32 @@ void backup(char * arg) {
     eeprom_read_block(tmp, (const void *) EEPROM_CO2_CAL_OFFSET, 4);
     eeprom_write_block(tmp, (void *) EEPROM_BACKUP_CO2_CAL_OFFSET, 4);
 
+    eeprom_read_block(tmp, (const void *) EEPROM_CO2_CAL_SLOPE, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_BACKUP_CO2_CAL_SLOPE, 4);    
+
     if (!BIT_IS_CLEARED(backup_check, BACKUP_STATUS_CO2_CALIBRATION_BIT)) {
       CLEAR_BIT(backup_check, BACKUP_STATUS_CO2_CALIBRATION_BIT);
       eeprom_write_word((uint16_t *) EEPROM_BACKUP_CHECK, backup_check);
     }
   }
+  else if (strncmp("tvoc", arg, 4) == 0) {
+    eeprom_read_block(tmp, (const void *) EEPROM_TVOC_CAL_OFFSET, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_BACKUP_TVOC_CAL_OFFSET, 4);
+
+    eeprom_read_block(tmp, (const void *) EEPROM_TVOC_CAL_SLOPE, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_BACKUP_TVOC_CAL_SLOPE, 4);    
+
+    eeprom_read_block(tmp, (const void *) EEPROM_RESISTANCE_CAL_OFFSET, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_BACKUP_RESISTANCE_CAL_OFFSET, 4);
+
+    eeprom_read_block(tmp, (const void *) EEPROM_RESISTANCE_CAL_SLOPE, 4);
+    eeprom_write_block(tmp, (void *) EEPROM_BACKUP_RESISTANCE_CAL_SLOPE, 4);    
+
+    if (!BIT_IS_CLEARED(backup_check, BACKUP_STATUS_CO2_CALIBRATION_BIT)) {
+      CLEAR_BIT(backup_check, BACKUP_STATUS_CO2_CALIBRATION_BIT);
+      eeprom_write_word((uint16_t *) EEPROM_BACKUP_CHECK, backup_check);
+    }
+  }  
   else if (strncmp("temp", arg, 4) == 0) {
     eeprom_read_block(tmp, (const void *) EEPROM_TEMPERATURE_OFFSET, 4);
     eeprom_write_block(tmp, (void *) EEPROM_BACKUP_TEMPERATURE_OFFSET, 4);
@@ -3605,6 +3737,7 @@ void backup(char * arg) {
     configInject("backup mqttpwd\r");
     configInject("backup key\r");
     configInject("backup co2\r");    
+    configInject("backup tvoc\r"); 
     configInject("backup temp\r");
     configInject("backup hum\r");    
     configInject("backup mac\r");
@@ -3792,7 +3925,7 @@ boolean add_baseline_voltage_characterization(char * arg, uint32_t eeprom_table_
     return false;  
   }
     
-  if (!convertStringToFloat(token, &(baseline_voltage_struct.temperature_degC))) {
+  if (!convertStringToFloat(token, &(baseline_value_struct.temperature_degC))) {
     Serial.print(F("Error: Failed to convert temperature string \""));
     Serial.print(token);
     Serial.println(F("\" to decimal number."));
@@ -3805,7 +3938,7 @@ boolean add_baseline_voltage_characterization(char * arg, uint32_t eeprom_table_
     return false;  
   }
   
-  if (!convertStringToFloat(token, &(baseline_voltage_struct.slope_volts_per_degC))) {
+  if (!convertStringToFloat(token, &(baseline_value_struct.slope_volts_per_degC))) {
     Serial.print(F("Error: Failed to convert slope string \""));
     Serial.print(token);
     Serial.println(F("\" to decimal number."));
@@ -3819,7 +3952,7 @@ boolean add_baseline_voltage_characterization(char * arg, uint32_t eeprom_table_
     return false;  
   }  
   
-  if (!convertStringToFloat(token, &(baseline_voltage_struct.intercept_volts))) {
+  if (!convertStringToFloat(token, &(baseline_value_struct.intercept_volts))) {
     Serial.print(F("Error: Failed to convert intercept string \""));
     Serial.print(token);
     Serial.println(F("\" to decimal number."));
@@ -3842,14 +3975,14 @@ boolean add_baseline_voltage_characterization(char * arg, uint32_t eeprom_table_
     if(!valid_temperature_characterization_struct(&tmp)){
       // ok we've found a slot where our new entry might be able to go, but first we have to enforce the monotinicity constraint
       // so that the search process is easier later
-      if(temperature_of_first_valid_entry_degC >= baseline_voltage_struct.temperature_degC){
+      if(temperature_of_first_valid_entry_degC >= baseline_value_struct.temperature_degC){
         // monotonicity contraint violation
         Serial.println(F("Error: Entries must be added in increasing order of temperature"));
         return false;
       }
       empty_location_found = true;
       // write the newly parsed struct at this index
-      eeprom_write_block((void *) &baseline_voltage_struct, (void *) (eeprom_table_base_address + (ii*sizeof(baseline_voltage_t))), sizeof(baseline_voltage_t));
+      eeprom_write_block((void *) &baseline_value_struct, (void *) (eeprom_table_base_address + (ii*sizeof(baseline_voltage_t))), sizeof(baseline_voltage_t));
       break;
     }
     else{
@@ -3940,8 +4073,11 @@ void tvoc_baseline_voltage_characterization_command(char * arg){
   baseline_voltage_characterization_command(arg, EEPROM_TVOC_BASELINE_VOLTAGE_TABLE);
 }
 
+void res_baseline_voltage_characterization_command(char * arg){
+  baseline_voltage_characterization_command(arg, EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE);
+}
 void load_temperature_characterization_entry(uint32_t eeprom_table_base_address, uint8_t index){
-  eeprom_read_block((void *) &baseline_voltage_struct, (void *) (eeprom_table_base_address + (index*sizeof(baseline_voltage_t))), sizeof(baseline_voltage_t));  
+  eeprom_read_block((void *) &baseline_value_struct, (void *) (eeprom_table_base_address + (index*sizeof(baseline_voltage_t))), sizeof(baseline_voltage_t));  
 }
 
 boolean load_and_validate_temperature_characterization_entry(uint32_t eeprom_table_base_address, uint8_t index){
@@ -3954,12 +4090,12 @@ boolean find_and_load_temperature_characterization_entry(uint32_t eeprom_table_b
   // this is enforced by the add entry mechanism
 
   // finds the first entry that has a temperature that is <= target_temperature
-  // as a side-effect, if such an entry is found, it is loaded into baseline_voltage_struct
+  // as a side-effect, if such an entry is found, it is loaded into baseline_value_struct
   
   int8_t index_of_highest_temperature_that_is_less_than_or_equal_to_target_temperature = -1;
   for(uint8_t ii = 0; ii < 5; ii++){
     if(load_and_validate_temperature_characterization_entry(eeprom_table_base_address, ii)){
-      if(baseline_voltage_struct.temperature_degC <= target_temperature_degC){
+      if(baseline_value_struct.temperature_degC <= target_temperature_degC){
         index_of_highest_temperature_that_is_less_than_or_equal_to_target_temperature = ii;
       }
       else{
@@ -4006,9 +4142,9 @@ boolean valid_temperature_characterization_struct(baseline_voltage_t * temperatu
 
 boolean valid_temperature_characterization_entry(uint32_t eeprom_table_base_address, uint8_t index){
   // the entry is valid only if none of the three fields are NaN
-  // read the requested table entry into RAM, note side effect is baseline_voltage_struct is loaded with the data    
+  // read the requested table entry into RAM, note side effect is baseline_value_struct is loaded with the data    
   load_temperature_characterization_entry(eeprom_table_base_address, index);
-  return valid_temperature_characterization_struct(&baseline_voltage_struct);
+  return valid_temperature_characterization_struct(&baseline_value_struct);
 }
 
 boolean valid_temperature_characterization(uint32_t eeprom_table_base_address){
@@ -4025,11 +4161,11 @@ void print_baseline_voltage_characterization_entry(uint32_t eeprom_table_base_ad
     Serial.print(F("        ")); 
     Serial.print(index);
     Serial.print(F("\t"));
-    Serial.print(baseline_voltage_struct.temperature_degC,8);
+    Serial.print(baseline_value_struct.temperature_degC,8);
     Serial.print(F("\t"));
-    Serial.print(baseline_voltage_struct.slope_volts_per_degC,8);
+    Serial.print(baseline_value_struct.slope_volts_per_degC,8);
     Serial.print(F("\t"));
-    Serial.print(baseline_voltage_struct.intercept_volts,8);
+    Serial.print(baseline_value_struct.intercept_volts,8);
     Serial.println();
   }
   
@@ -5235,19 +5371,60 @@ float pressure_scale_factor(void){
 
 void co2_equivalent_compensation(float average, float * converted_value, float * temperature_compensated_value){
   static boolean first_access = true;
-  static float co2_zero_volts = 0.0f;
+  static float co2_offset = 0.0f;
+  static float co2_slope = 1.0f;
   if(first_access){   
-    co2_zero_volts = eeprom_read_float((const float *) EEPROM_CO2_CAL_OFFSET);
+    co2_offset = eeprom_read_float((const float *) EEPROM_CO2_CAL_OFFSET);
+    co2_slope = eeprom_read_float((const float *) EEPROM_CO2_CAL_SLOPE);
+
+    if(isnan(co2_offset)){
+      co2_offset = 0.0f;
+    }
+
+    if(isnan(co2_slope)){
+      co2_slope = 1.0f;
+    }
+    
     first_access = false;
   }
 
-  // TODO: if we find there are temperature effects to compensate for, calculate parameters for compensation here
-  // TODO: apply compensation formula using temperature dependant parameters here
-
   // there's no interpretation needed for this sensor
   *converted_value = average; 
-  
-  *temperature_compensated_value = *converted_value; // no compensation yet
+
+  // use the BLV table to correct temperature dependent baseline if available
+  *temperature_compensated_value = *converted_value; 
+  float baseline_value_at_temperature = 0.0f;
+  if(valid_temperature_characterization(EEPROM_CO2_BASELINE_VOLTAGE_TABLE)){
+    // do the math a little differently in this case
+    // first figure out what baseline_offset_voltage_at_temperature is based on the characterization
+    // (1) find the first entry in the table where temperature_degc is >= the table temperature
+    // (2) if no such entry exists, then it is colder than the coldest characterized temperature
+    // (3) use the associated slope and intercept to determine baseline_offset_voltage_at_temperature
+    //     using the formula baseline_offset_voltage_at_temperature = slope * temperature_degc + intercept
+    if(find_and_load_temperature_characterization_entry(EEPROM_CO2_BASELINE_VOLTAGE_TABLE, temperature_degc)){
+      // great we have a useful entry in the table for this temperature, pull the slope and intercept
+      // and use them to evaluate the baseline voltage at the current temperature
+      baseline_value_at_temperature = 
+        temperature_degc * baseline_value_struct.slope_volts_per_degC + baseline_value_struct.intercept_volts;
+    }
+    else{
+      // it's colder than the coldest characterized temperature
+      // in this special case, instead of extrapolating, we will just evaluate the entry line
+      // at coldest characterized temperature, and use that
+      load_temperature_characterization_entry(EEPROM_CO2_BASELINE_VOLTAGE_TABLE, 0);
+      baseline_value_at_temperature = 
+        baseline_value_struct.temperature_degC * baseline_value_struct.slope_volts_per_degC + baseline_value_struct.intercept_volts;
+    }
+
+    
+    // then do the math with that number, if we did the characterization properly, then     
+    *temperature_compensated_value -= baseline_value_at_temperature;
+  }
+    
+  // apply config-based linear transform
+  *temperature_compensated_value *= co2_slope;
+  *temperature_compensated_value += co2_offset;
+    
   if(*temperature_compensated_value <= 0.0f){
     *temperature_compensated_value = 0.0f;
   }
@@ -5255,17 +5432,56 @@ void co2_equivalent_compensation(float average, float * converted_value, float *
 
 void tvoc_compensation(float average, float * converted_value, float * temperature_compensated_value){
   static boolean first_access = true;
-  static float co2_zero_volts = 0.0f;
+  static float tvoc_offset = 0.0f;
+  static float tvoc_slope = 1.0f;
   if(first_access){   
-    co2_zero_volts = eeprom_read_float((const float *) EEPROM_CO2_CAL_OFFSET);
-    first_access = false;
-  }
+    tvoc_offset = eeprom_read_float((const float *) EEPROM_TVOC_CAL_OFFSET);
+    tvoc_slope = eeprom_read_float((const float *) EEPROM_TVOC_CAL_SLOPE);
 
-  // TODO: if we find there are temperature effects to compensate for, calculate parameters for compensation here
-  // TODO: apply compensation formula using temperature dependant parameters here
+    if(isnan(tvoc_offset)){
+      tvoc_offset = 0.0f;
+    }
+
+    if(isnan(tvoc_slope)){
+      tvoc_slope = 1.0f;
+    }
+  }
 
   // there's no interpretation needed for this sensor
   *converted_value = average; 
+
+  // use the BLV table to correct temperature dependent baseline if available
+  *temperature_compensated_value = *converted_value; 
+  float baseline_value_at_temperature = 0.0f;
+  if(valid_temperature_characterization(EEPROM_TVOC_BASELINE_VOLTAGE_TABLE)){
+    // do the math a little differently in this case
+    // first figure out what baseline_offset_voltage_at_temperature is based on the characterization
+    // (1) find the first entry in the table where temperature_degc is >= the table temperature
+    // (2) if no such entry exists, then it is colder than the coldest characterized temperature
+    // (3) use the associated slope and intercept to determine baseline_offset_voltage_at_temperature
+    //     using the formula baseline_offset_voltage_at_temperature = slope * temperature_degc + intercept
+    if(find_and_load_temperature_characterization_entry(EEPROM_TVOC_BASELINE_VOLTAGE_TABLE, temperature_degc)){
+      // great we have a useful entry in the table for this temperature, pull the slope and intercept
+      // and use them to evaluate the baseline voltage at the current temperature
+      baseline_value_at_temperature = 
+        temperature_degc * baseline_value_struct.slope_volts_per_degC + baseline_value_struct.intercept_volts;
+    }
+    else{
+      // it's colder than the coldest characterized temperature
+      // in this special case, instead of extrapolating, we will just evaluate the entry line
+      // at coldest characterized temperature, and use that
+      load_temperature_characterization_entry(EEPROM_TVOC_BASELINE_VOLTAGE_TABLE, 0);
+      baseline_value_at_temperature = 
+        baseline_value_struct.temperature_degC * baseline_value_struct.slope_volts_per_degC + baseline_value_struct.intercept_volts;
+    }
+    
+    // then do the math with that number, if we did the characterization properly, then     
+    *temperature_compensated_value -= baseline_value_at_temperature;
+  }
+    
+  // apply config-based linear transform
+  *temperature_compensated_value *= tvoc_slope;
+  *temperature_compensated_value += tvoc_offset;
   
   *temperature_compensated_value = *converted_value; // no compensation yet
   if(*temperature_compensated_value <= 0.0f){
@@ -5275,17 +5491,56 @@ void tvoc_compensation(float average, float * converted_value, float * temperatu
 
 void resistance_compensation(float average, float * converted_value, float * temperature_compensated_value){
   static boolean first_access = true;
-  static float co2_zero_volts = 0.0f;
-  if(first_access){
-    co2_zero_volts = eeprom_read_float((const float *) EEPROM_CO2_CAL_OFFSET);
-    first_access = false;
-  }
+  static float resistance_offset = 0.0f;
+  static float resistance_slope = 1.0f;
+  if(first_access){   
+    resistance_offset = eeprom_read_float((const float *) EEPROM_RESISTANCE_CAL_OFFSET);
+    resistance_slope = eeprom_read_float((const float *) EEPROM_RESISTANCE_CAL_SLOPE);
 
-  // TODO: if we find there are temperature effects to compensate for, calculate parameters for compensation here
-  // TODO: apply compensation formula using temperature dependant parameters here
+    if(isnan(resistance_offset)){
+      resistance_offset = 0.0f;
+    }
+
+    if(isnan(resistance_slope)){
+      resistance_slope = 1.0f;
+    }
+  }
 
   // there's no interpretation needed for this sensor
   *converted_value = average; 
+
+  // use the BLV table to correct temperature dependent baseline if available
+  *temperature_compensated_value = *converted_value; 
+  float baseline_value_at_temperature = 0.0f;
+  if(valid_temperature_characterization(EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE)){
+    // do the math a little differently in this case
+    // first figure out what baseline_offset_voltage_at_temperature is based on the characterization
+    // (1) find the first entry in the table where temperature_degc is >= the table temperature
+    // (2) if no such entry exists, then it is colder than the coldest characterized temperature
+    // (3) use the associated slope and intercept to determine baseline_offset_voltage_at_temperature
+    //     using the formula baseline_offset_voltage_at_temperature = slope * temperature_degc + intercept
+    if(find_and_load_temperature_characterization_entry(EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE, temperature_degc)){
+      // great we have a useful entry in the table for this temperature, pull the slope and intercept
+      // and use them to evaluate the baseline voltage at the current temperature
+      baseline_value_at_temperature = 
+        temperature_degc * baseline_value_struct.slope_volts_per_degC + baseline_value_struct.intercept_volts;
+    }
+    else{
+      // it's colder than the coldest characterized temperature
+      // in this special case, instead of extrapolating, we will just evaluate the entry line
+      // at coldest characterized temperature, and use that
+      load_temperature_characterization_entry(EEPROM_RESISTANCE_BASELINE_VOLTAGE_TABLE, 0);
+      baseline_value_at_temperature = 
+        baseline_value_struct.temperature_degC * baseline_value_struct.slope_volts_per_degC + baseline_value_struct.intercept_volts;
+    }
+    
+    // then do the math with that number, if we did the characterization properly, then     
+    *temperature_compensated_value -= baseline_value_at_temperature;
+  }
+    
+  // apply config-based linear transform
+  *temperature_compensated_value *= resistance_slope;
+  *temperature_compensated_value += resistance_offset;
   
   *temperature_compensated_value = *converted_value; // no compensation yet
   if(*temperature_compensated_value <= 0.0f){
@@ -5461,7 +5716,8 @@ void loop_wifi_mqtt_mode(void){
       if(mqttReconnect()){         
         updateLCD("TEMP ", 0, 0, 5);
         updateLCD("RH ", 10, 0, 3);         
-        updateLCD("CO2 ", 0, 1, 4);        
+        updateLCD("CO2 ", 0, 1, 4);    
+            
                       
         //connected to MQTT server and connected to Wi-Fi network        
         num_mqtt_connect_retries = 0;   
@@ -5509,19 +5765,21 @@ void loop_wifi_mqtt_mode(void){
           updateLCD("XXX", 13, 0, 3);
         }
         
-        
         if(iaqcore_ready){
           if(!publishIAQCore()){
-            Serial.println(F("Error: Failed to publish CO2."));                    
+            Serial.println(F("Error: Failed to publish iAQ-core."));                    
           }
           else{
-            updateLCD(co2_equivalent_ppm, 5, 1, 5);  
+            updateLCD(co2_equivalent_ppm, 4, 1, 3);  
+            updateLCD(tvoc_ppb, 13, 1, 3);  
           }
         }
         else{
-          updateLCD("---", 5, 1, 5); 
-        }            
+          updateLCD("---", 4, 1, 3); 
+          updateLCD("---", 13, 1, 3); 
+        }                            
       }
+
       else{
         // not connected to MQTT server
         num_mqtt_connect_retries++;
