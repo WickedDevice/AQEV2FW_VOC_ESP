@@ -94,7 +94,7 @@ float gps_longitude = TinyGPS::GPS_INVALID_F_ANGLE;
 float gps_altitude = TinyGPS::GPS_INVALID_F_ALTITUDE;
 unsigned long gps_age = TinyGPS::GPS_INVALID_AGE;
 
-#define MAX_SAMPLE_BUFFER_DEPTH (120) // 10 minutes @ 5 second resolution
+#define MAX_SAMPLE_BUFFER_DEPTH (96) // 8 minutes @ 5 second resolution
 #define CO2_EQUIVALENT_SAMPLE_BUFFER (0)
 #define TVOC_SAMPLE_BUFFER           (1)
 #define RESISTANCE_SAMPLE_BUFFER     (2)
@@ -5059,7 +5059,7 @@ boolean mqttPublish(char * topic, char *str){
   uint32_t space_required = 5;
   space_required += strlen(topic);
   space_required += strlen(str);
-  if(space_required >= 511){
+  if(space_required >= 1023){
     Serial.println(F("Aborted."));
     response_status = false;
   } 
