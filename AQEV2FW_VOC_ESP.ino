@@ -1101,7 +1101,7 @@ void initializeHardware(void) {
     init_esp8266_ok = false;
   }
 
-  updateLCD("CO2", 0);
+  updateLCD("VOC", 0);
   updateLCD("MODEL", 1);
   SUCCESS_MESSAGE_DELAY();
 
@@ -5718,7 +5718,7 @@ void loop_wifi_mqtt_mode(void){
         updateLCD("TEMP ", 0, 0, 5);
         updateLCD("RH ", 10, 0, 3);         
         updateLCD("CO2 ", 0, 1, 4);    
-            
+        updateLCD("VOC ",9, 1, 4);                        
                       
         //connected to MQTT server and connected to Wi-Fi network        
         num_mqtt_connect_retries = 0;   
@@ -5778,7 +5778,7 @@ void loop_wifi_mqtt_mode(void){
         else{
           updateLCD("---", 4, 1, 3); 
           updateLCD("---", 13, 1, 3); 
-        }                            
+        }
       }
 
       else{
