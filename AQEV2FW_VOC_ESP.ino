@@ -95,12 +95,13 @@ float gps_altitude = TinyGPS::GPS_INVALID_F_ALTITUDE;
 unsigned long gps_age = TinyGPS::GPS_INVALID_AGE;
 
 #define MAX_SAMPLE_BUFFER_DEPTH (96) // 8 minutes @ 5 second resolution
+#define NUM_BUFFERED_SENSORS (5)
 #define CO2_EQUIVALENT_SAMPLE_BUFFER (0)
 #define TVOC_SAMPLE_BUFFER           (1)
 #define RESISTANCE_SAMPLE_BUFFER     (2)
 #define TEMPERATURE_SAMPLE_BUFFER    (3)
 #define HUMIDITY_SAMPLE_BUFFER       (4)
-float sample_buffer[5][MAX_SAMPLE_BUFFER_DEPTH] = {0};
+float sample_buffer[NUM_BUFFERED_SENSORS][MAX_SAMPLE_BUFFER_DEPTH] = {0};
 uint16_t sample_buffer_idx = 0;
 
 uint32_t sampling_interval = 0;    // how frequently the sensorss are sampled
@@ -5088,7 +5089,7 @@ boolean publishHeartbeat(){
   "\"serial-number\":\"%s\","
   "\"converted-value\":%d,"
   "\"firmware-version\":\"%s\","
-  "\"publishes\":[\"co2\",\"temperature\",\"humidity\"],"
+  "\"publishes\":[\"voc\",\"temperature\",\"humidity\"],"
   "\"counter\":%lu"
   "}", mqtt_client_id, sample, firmware_version, post_counter++);  
   
@@ -5302,7 +5303,7 @@ void advanceSampleBufferIndex(void){
 }
 
 void addSample(uint8_t sample_type, float value){
-  if((sample_type < 4) && (sample_buffer_idx < MAX_SAMPLE_BUFFER_DEPTH)){
+  if((sample_type < NUM_BUFFERED_SENSORS) && (sample_buffer_idx < MAX_SAMPLE_BUFFER_DEPTH)){
     sample_buffer[sample_type][sample_buffer_idx] = value;    
   }
 }
@@ -5673,7 +5674,7 @@ boolean publishIAQCore(){
 }
 
 void petWatchdog(void){
-  tinywdt.pet(); 
+  tinywdt.pet();
 }
 
 void delayForWatchdog(void){
