@@ -5771,12 +5771,12 @@ void loop_wifi_mqtt_mode(void){
             Serial.println(F("Error: Failed to publish iAQ-core."));                    
           }
           else{
-            updateLCD(co2_equivalent_ppm, 4, 1, 3);  
+            updateLCD(co2_equivalent_ppm, 4, 1, 4);  
             updateLCD(tvoc_ppb, 13, 1, 3);  
           }
         }
         else{
-          updateLCD("---", 4, 1, 3); 
+          updateLCD("----", 4, 1, 4); 
           updateLCD("---", 13, 1, 3); 
         }
       }
