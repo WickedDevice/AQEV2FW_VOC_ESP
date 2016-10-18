@@ -5484,7 +5484,6 @@ void tvoc_compensation(float average, float * converted_value, float * temperatu
   *temperature_compensated_value *= tvoc_slope;
   *temperature_compensated_value += tvoc_offset;
   
-  *temperature_compensated_value = *converted_value; // no compensation yet
   if(*temperature_compensated_value <= 0.0f){
     *temperature_compensated_value = 0.0f;
   }
@@ -5543,7 +5542,6 @@ void resistance_compensation(float average, float * converted_value, float * tem
   *temperature_compensated_value *= resistance_slope;
   *temperature_compensated_value += resistance_offset;
   
-  *temperature_compensated_value = *converted_value; // no compensation yet
   if(*temperature_compensated_value <= 0.0f){
     *temperature_compensated_value = 0.0f;
   }
