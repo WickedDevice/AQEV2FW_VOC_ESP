@@ -5259,6 +5259,9 @@ void collectCO2Equivalent(void){
         iaqcore_ready = true;
       }
     }
+    else{
+      addSample(CO2_EQUIVALENT_SAMPLE_BUFFER, instant_co2_equivalent_ppm); // add a zero
+    }
   }
 }
 
@@ -5271,6 +5274,9 @@ void collectTVOC(void){
         iaqcore_ready = true;
       }
     }
+    else{
+      addSample(TVOC_SAMPLE_BUFFER, instant_tvoc_ppb); // add a zero
+    }    
   }
 }
 
@@ -5283,6 +5289,9 @@ void collectResistance(void){
         iaqcore_ready = true;
       }
     }
+    else{
+      addSample(RESISTANCE_SAMPLE_BUFFER, instant_resistance_ohms); // add a zero
+    }        
   }
 }
 
