@@ -4972,8 +4972,7 @@ boolean mqttReconnect(void){
        Serial.print(F("Without Authentication..."));
        connect_status = mqtt_client.connect(mqtt_client_id);
      }
-
-     clearLCD();         
+           
      if (connect_status) {
        Serial.println(F("OK."));
        return true;
@@ -5674,10 +5673,11 @@ void loop_wifi_mqtt_mode(void){
       num_mqtt_intervals_without_wifi = 0;
       
       if(mqttReconnect()){         
-        updateLCD("TEMP ", 0, 0, 5);
-        updateLCD("RH ", 10, 0, 3);         
-        updateLCD("CO2 ", 0, 1, 4);    
-        updateLCD("VOC ",9, 1, 4);                        
+        clearLCD();  
+        updateLCD("TEMP ", 0, 0, 5, false);
+        updateLCD("RH ", 10, 0, 3, false);         
+        updateLCD("CO2 ", 0, 1, 4, false);    
+        updateLCD("VOC ",9, 1, 4, false);                        
                       
         //connected to MQTT server and connected to Wi-Fi network        
         num_mqtt_connect_retries = 0;   
