@@ -5,6 +5,7 @@
 #include <RTClib.h>
 #include <RTC_DS3231.h>
 #include <Time.h>
+#include <TimeLib.h>
 #include <TinyWatchdog.h>
 #include <SHT25.h>
 #include <WildFire_SPIFlash.h>
